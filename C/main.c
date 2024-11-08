@@ -5,12 +5,35 @@
 #include "filemanager.h"
 #include "songmanager.h"
 
-int main() {
-    download_song("https://www.youtube.com/watch?v=DaJZjG7ByPU", "test");
+void play_audio(const char *filename) {
+    char command[1024];
+    snprintf(command, sizeof(command), "ffplay -nodisp -autoexit '%s'", filename);
+    system(command);
+}
 
-    Song song = {};
+void play_song(const char *title) {
+    char filepath[1024];
+    snprintf(filepath, sizeof(filepath), "%s/%s.wav", DATA_SONGS, title);
+    play_audio(filepath);
+}
+
+void recommend_song(SongList *songList) {
+    if (songList->count == 0) {
+        printf("No songs available.\n");
+        return;
+    }
+    int random_index = rand() % songList->count;
+    play_song(songList->songs[random_index].title);
+}
+
+int main() {
     SongList songList;
     
     init_sl(&songList);
-    push_back_sl(&songList, &song);
+    int status = load_songs(&songList);
+    if (status) {
+        return status;
+    }
+
+    recommend_song(&songList);
 }

@@ -1,3 +1,4 @@
+#pragma once
 typedef struct {
     char title[256];
     char youtube_link[512];
@@ -7,7 +8,7 @@ typedef struct {
 
 typedef struct {
     Song *songs;
-    int count;
+    int count, maxsize;
 } SongList;
 
 void init_sl(SongList*);

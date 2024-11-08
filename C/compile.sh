@@ -1,2 +1,2 @@
 #!/bin/bash
-gcc gpt.c -pthread -o gpt 
+gcc filemanager.c songmanager.c main.c -o main
