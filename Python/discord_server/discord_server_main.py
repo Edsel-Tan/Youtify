@@ -9,58 +9,33 @@ import re
 from pydub import AudioSegment
 import asyncio
 
-# CONSTANTS
-DEFAULT_LINK = "https://www.youtube.com"
-SEARCH_LINK = "https://www.youtube.com/results"
-DATA_FOLDER = "data"
-DATA_TXT = os.path.join(DATA_FOLDER, "data.txt")
-DATA_SONGS = os.path.join(DATA_FOLDER, "songs")
-DATA_HISTORY = os.path.join(DATA_FOLDER, "history.txt")
-DATA_TMP = os.path.join(DATA_FOLDER, "tmp")
-SONG_EXTENSION = "wav"
-SONG_LIST = {}
+from consts import *
+from structs import *
+import database
+
+# GLOBALS
 SONG_LINKS = set()
 SONG_HISTORY = {}
 SONGS = []
+SONG_NAMES = {}
 ALIASES = {}
-DELIMITER = "\t"
 VOLUME_ADJUSTMENT = -20
-YES = "✅"
-NO = "❎"
 PLAYING_QUEUE = {}
-RANDOM_MIN = 0
-RANDOM_MAX = 1000000000
 
-
+# ADMINS
 KEY = None
 USER_ID = set()
 ADMIN = None
 
-
-class PlayingQueue:
-    guild: int
-    vc: discord.VoiceClient
-    playingQueue: list[tuple[str, str, bool]]
-    playing: bool
-    skip: bool
-
-    def __init__(self, guild_id: int, vc: discord.VoiceClient):
-        self.guild = guild_id
-        self.vc = vc
-        self.playingQueue = []
-        self.playing = False
-        self.skip = False
-
-
 # Hints
-PLAYING_QUEUE : dict[int, PlayingQueue]
+PLAYING_QUEUE: dict[int, PlayingQueue]
+SONG_NAMES: dict[str, Song]
+SONG_LINKS: set[str]
+SONG_HISTORY: dict[str, int]
+SONGS: list[Song]
+ALIASES: dict[str, str]
+VOLUME_ADJUSTMENT: int
 
-
-
-        
-pathWithExtension = lambda x: f"{x}.{SONG_EXTENSION}"
-pathFromSingerTitle = lambda singer, title: os.path.join(DATA_SONGS, f"{singer}-{title}")
-pathFromLinkTmp = lambda x: os.path.join(DATA_TMP, f"{x}")
 
 # Initialize bot
 intents = discord.Intents.default()
@@ -74,8 +49,8 @@ HELPER FUNCTIONS
 """
 
 def associated(string1: str, string2: str) -> bool:
-    string1_parts = string1.split()
-    string2_parts = string2.split()
+    string1_parts = string1.lower().split()
+    string2_parts = string2.lower().split()
     for part in string1_parts:
         if part in string2:
             return True
@@ -85,102 +60,36 @@ def associated(string1: str, string2: str) -> bool:
     return False
 
 # Load songs
-def load() -> None:
-    global SONG_HISTORY, SONG_LIST, SONGS
-    with open(DATA_TXT, "r") as file:
-        lines = [line.strip("\n") for line in file.readlines()]
-        for line in lines:
-            try:
-                singer, title, rating, ratingcount, youtubelink = line.split(DELIMITER)
-                if singer in SONG_LIST:
-                    SONG_LIST[singer][title] = {
-                        "rating": float(rating),
-                        "ratingcount": int(ratingcount),
-                        "youtube": youtubelink,
-                    }
-                else:
-                    SONG_LIST[singer] = {
-                        title: {
-                            "rating": float(rating),
-                            "ratingcount": int(ratingcount),
-                            "youtube": youtubelink,
-                        }
-                    }
-                SONGS.append((singer, title))
-            except:
-                print(f"Data file corrupted at line: {line}")
-                SONGS = {}
-                SONG_LIST = []
-
-    with open(DATA_HISTORY, "r") as file:
-        lines  = [line.strip("\n") for line in file]
-        for line in lines:
-            try:
-                link, count = line.split(DELIMITER)
-                count = int(count.strip())
-                SONG_HISTORY[link] = count
-            except:
-                print(f"Data history file corrupted at line: {line}")
-                SONG_HISTORY = {}
-
-# Save songs
-def save() -> None:
-    with open(DATA_TXT, "w") as file:
-        for singer in SONG_LIST:
-            for title in SONG_LIST[singer]:
-                rating, ratingcount, youtubelink = (
-                    str(SONG_LIST[singer][title]["rating"]),
-                    str(SONG_LIST[singer][title]["ratingcount"]),
-                    SONG_LIST[singer][title]["youtube"]
-                )
-                file.write(DELIMITER.join([singer, title, rating, ratingcount, youtubelink]) + "\n")
-
-# Update histroy
-def save_history() -> None:
-    with open(DATA_HISTORY, "w") as file:
-        for link in SONG_HISTORY:
-            file.write(DELIMITER.join([link, str(SONG_HISTORY[link])]) + "\n")
+def load():
+    database.init_aliases(ALIASES)
+    database.init_songs(SONGS, SONG_LINKS, SONG_NAMES)
+    database.init_songs_history(SONG_HISTORY)
 
 
-# Download song from YouTube
-def download(link: str, path: str) -> None:
+# Download song
+def download(song: Song):
     yt_dl_opt = {
         'format': 'bestaudio',
-        'outtmpl': f"{path}",
+        'outtmpl': f"{song.path()}",
+        'noplaylist': True,
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': SONG_EXTENSION
         }]
     }
     with yt_dlp.YoutubeDL(yt_dl_opt) as dl:
-        dl.download([link])
+        dl.download([song.link])
 
-
-# Download song from YouTube
-def downloadTemp(link: str, path: str) -> None:
+def get_duration(link: str):
     yt_dl_opt = {
-        'format': 'bestaudio',
-        'outtmpl': f"{path}",
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': SONG_EXTENSION
-        }]
+        'quiet': True,
     }
-    with yt_dlp.YoutubeDL(yt_dl_opt) as dl:
-        dl.download([link])
 
-# Download song from YouTube
-def downloadPernament(link: str, singer: str, title: str) -> None:
-    yt_dl_opt = {
-        'format': 'bestaudio',
-        'outtmpl': f"{pathFromSingerTitle(singer, title)}",
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': SONG_EXTENSION
-        }]
-    }
     with yt_dlp.YoutubeDL(yt_dl_opt) as dl:
-        dl.download([link])
+        metadict = dl.extract_info(link, download=False)
+        return metadict['duration']
+    
+    return MAX_DURATION
 
 """
 PLAYING QUEUE HELPER FUNCTIONS
@@ -198,7 +107,7 @@ def query(search: str) -> str:
     return results
 
 
-async def enqueue(guild_id: int, vc: discord.VoiceClient, song: tuple[str, str, bool]) -> bool:
+def enqueue(guild_id: int, vc: discord.VoiceState, song: Song) -> bool:
     if guild_id not in PLAYING_QUEUE:
         PLAYING_QUEUE[guild_id] = PlayingQueue(guild_id, vc)
 
@@ -209,18 +118,22 @@ async def enqueue(guild_id: int, vc: discord.VoiceClient, song: tuple[str, str, 
 
 async def start_playing(guild_id: int):
     PLAYING_QUEUE[guild_id].playing = True
+    PLAYING_QUEUE[guild_id].vc_client = await PLAYING_QUEUE[guild_id].vc.channel.connect()
     while len(PLAYING_QUEUE[guild_id].playingQueue) > 0:
-        name, path, isTMP = PLAYING_QUEUE[guild_id].playingQueue[0]
-        await PLAYING_QUEUE[guild_id].vc.channel.send(f"Now playing: {name}")
-        if isTMP:
-            download(name, path)
+        song = PLAYING_QUEUE[guild_id].playingQueue[0]
+        if PLAYING_QUEUE[guild_id].vc.channel:
+            await PLAYING_QUEUE[guild_id].vc.channel.send(f"Now playing: {song.name()}")
+        else:
+            del PLAYING_QUEUE[guild_id]
+            return
+        if song.temp:
+            download(song)
         PLAYING_QUEUE[guild_id].playingQueue.pop(0)
-        await playAudioInVC(PLAYING_QUEUE[guild_id].vc, guild_id, pathWithExtension(path))
-        if isTMP:
-            os.remove(pathWithExtension(path))
-        save_history()
+        await playAudioInVC(PLAYING_QUEUE[guild_id].vc_client, guild_id, song.pathWithExtension())
+        if song.temp:
+            os.remove(song.pathWithExtension())
+    await PLAYING_QUEUE[guild_id].vc_client.disconnect()
     del PLAYING_QUEUE[guild_id]
-    await PLAYING_QUEUE[guild_id].vc.disconnect()
 
 # Play audio in voice chat
 async def playAudioInVC(vc: discord.VoiceClient, guild_id: int, path: str):
@@ -237,6 +150,24 @@ async def playAudioInVC(vc: discord.VoiceClient, guild_id: int, path: str):
 AUDIO VC COMMANDS
 """
 
+@tree.command(name = "playlist", description="Plays all songs in a Youtube Playlist.")
+async def play_playlist(interaction: discord.Interaction, link: str):
+    if not interaction.user.voice or not interaction.user.voice.channel:
+        await interaction.response.send_message("You need to be in a voice channel to play music.")
+        return
+    
+    if "www.youtube.com/watch?v=" not in link:
+        await interaction.response.send_message("Invalid link.")
+        return
+    
+    with requests.get(link) as r:
+        if r.status_code != 200:
+            await interaction.response.send_message("Could not open link.")
+            return
+        
+    await interaction.response.send_message("Queueing all songs...")
+    
+
 
 @tree.command(name = "playall", description="Queues all saved songs.")
 async def play_all(interaction: discord.Interaction):
@@ -249,12 +180,8 @@ async def play_all(interaction: discord.Interaction):
         return
     
     await interaction.response.send_message("Queueing all songs...")
-    for singer in SONG_LIST:
-        for title in SONG_LIST[singer]:
-            await enqueue(interaction.guild.id, interaction.user.voice.channel, 
-                          (f"{singer}-{title}", 
-                           pathFromSingerTitle(singer, title), 
-                           False))
+    for song in SONGS:
+        enqueue(interaction.guild.id, interaction.user.voice, song)
     
     if not PLAYING_QUEUE[interaction.guild.id].playing:
         await start_playing(interaction.guild.id)
@@ -310,19 +237,28 @@ async def play_link(interaction: discord.Interaction, link: str):
             await interaction.response.send_message("Could not open link.")
             return
         
-    key = random.randint(RANDOM_MIN, RANDOM_MAX)
-    path = pathFromLinkTmp(key)
-
-    SONG_HISTORY[link] = 1 + SONG_HISTORY[link] if link in SONG_HISTORY else 1
-
-   
-    if await enqueue(interaction.guild.id, interaction.user.voice.channel, (link, path, True)):
-        await interaction.response.send_message(f"Already playing in another voice channel.")
+    if get_duration(link) > MAX_DURATION:
+        await interaction.response.send_message("Duration exceeds maximum allowed limit (10 minutes).")
         return
-    
+        
+    key = random.randint(RANDOM_MIN, RANDOM_MAX)
+    song = Song("", str(key), link, 0, 0, True)
+
+    if link in SONG_HISTORY:
+        SONG_HISTORY[link] += 1
+        database.update_song_history((link, SONG_HISTORY[link]))
+    else:
+        SONG_HISTORY[link] = 1
+        database.add_song_history((link, SONG_HISTORY[link]))
+
+    if interaction.guild.id in PLAYING_QUEUE and interaction.user.voice.channel.id != PLAYING_QUEUE[interaction.guild.id].vc.channel.id:
+        await interaction.response.send_message("Already playing in another voice channel!")
+        return
+
+    enqueue(interaction.guild.id, interaction.user.voice, song)
     await interaction.response.send_message(f"Added {link} to queue.")
     if not PLAYING_QUEUE[interaction.guild.id].playing:
-        start_playing(interaction.guild.id)
+        await start_playing(interaction.guild.id)
 
         
 # Command to play a random song in voice chat
@@ -336,19 +272,16 @@ async def play_song(interaction: discord.Interaction):
         await interaction.response.send_message("You need to be in a voice channel to play music.")
         return
     
-    if interaction.guild.id in PLAYING_QUEUE and interaction.user.voice.channel.id != PLAYING_QUEUE[interaction.guild.id]["vc-id"]:
+    if interaction.guild.id in PLAYING_QUEUE and interaction.user.voice.channel.id != PLAYING_QUEUE[interaction.guild.id].vc.channel.id:
         await interaction.response.send_message("Already playing in another voice channel!")
         return
 
-    singer, title = random.choice(SONGS)
-    await interaction.response.send_message(f"Added {singer} {title} to queue.")
-    enqueue(interaction.guild.id, interaction.user.voice.channel, 
-            (f"{singer}-{title}", 
-            pathFromSingerTitle(singer, title), 
-            False))
+    song = random.choice(SONGS)
+    await interaction.response.send_message(f"Added {song.name()} to queue.")
+    enqueue(interaction.guild.id, interaction.user.voice, song)
     
     if not PLAYING_QUEUE[interaction.guild.id].playing:
-        start_playing(interaction.guild.id)
+        await start_playing(interaction.guild.id)
 
 
 
@@ -356,10 +289,52 @@ async def play_song(interaction: discord.Interaction):
 ADMIN FUNCTIONS
 """
 
+@tree.command(name='editsinger', description="Edits a saved song.")
+async def edit_singer(interaction: discord.Interaction, old_singer: str, new_singer: str):
+    if interaction.user.id not in USER_ID:
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
+
+    old_singer = old_singer.lstrip().rstrip()
+    new_singer = new_singer.lstrip().rstrip()
+
+    if old_singer not in ALIASES or ALIASES[old_singer] != old_singer:
+        print(ALIASES)
+        await interaction.response.send_message("Singer not recognized.", ephemeral=True)
+        return
+    
+    if new_singer in ALIASES and ALIASES[new_singer] == new_singer:
+        await interaction.response.send_message(f"There is already a singer by the name of {new_singer}", ephemeral=True)
+        return
+
+    for alias in ALIASES:
+        if ALIASES[alias] == old_singer and alias != old_singer:
+            ALIASES[alias] = new_singer
+            database.edit_alias((alias, old_singer), (alias, new_singer))
+        
+    del ALIASES[old_singer]
+    ALIASES[new_singer] = new_singer
+    database.edit_alias((old_singer, old_singer), (new_singer, new_singer))
+    
+    for song in SONGS:
+        if song.singer == old_singer:
+            old_song = song.__copy__()
+            song.singer = new_singer
+            database.edit_song(old_song, song)
+            del SONG_NAMES[old_song.name()]
+            SONG_NAMES[song.name()] = song
+
+    await interaction.response.send_message("Done.", ephemeral=True)
+    return
+
+    
+
+            
+    
 
 # Command to add a song
 @tree.command(name="add", description="Add a song to the playlist by searching YouTube.")
-async def add_song(interaction: discord.Interaction, title: str, singer: str):
+async def add_song(interaction: discord.Interaction, singer: str, title: str):
     if interaction.user.id not in USER_ID:
         await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
         return
@@ -368,13 +343,14 @@ async def add_song(interaction: discord.Interaction, title: str, singer: str):
     title = title.lstrip().rstrip()
 
     if singer in ALIASES:
+        singer = ALIASES[singer]
         await interaction.response.send_message(f"Singer recognized.", ephemeral=True)
     else:
         await interaction.response.send_message(f"Singer not recognized. Searching for aliases", ephemeral=True)
     
     check_marks = [YES, NO]
     if singer not in ALIASES:
-        for alias in SONG_LIST:
+        for alias in set(ALIASES.values()):
             if associated(singer, alias):
                 message = await interaction.channel.send(f"Did you mean {alias}?")
                 for tmp in check_marks:
@@ -390,14 +366,14 @@ async def add_song(interaction: discord.Interaction, title: str, singer: str):
                     return
 
                 if str(reaction) == YES:
-                    singer = alias
                     ALIASES[singer] = alias
+                    singer = alias
+                    database.add_alias((singer, alias))
                     break
+    
+    song_name = Song.format(singer, title)
 
-    if singer not in SONG_LIST:
-        SONG_LIST[singer] = {}
-
-    if title in SONG_LIST[singer]:
+    if song_name in SONG_NAMES:
         await interaction.followup.send("This song is already in the list.")
         return
     
@@ -418,17 +394,25 @@ async def add_song(interaction: discord.Interaction, title: str, singer: str):
         if idx < 0 or idx >= len(results):
             await interaction.followup.send("Invalid selection.")
             return
-
-        SONG_LIST[singer][title] = {
-            "youtube": results[idx],
-            "rating": 0,
-            "ratingcount": 0
-        }
-        if results[idx] in SONG_LINKS:
-            await interaction.followup.send(f"Song already exists as ")
-        downloadPernament(results[idx], singer, title)
-        await interaction.followup.send(f"Added {title} to the song list.")
-        save()
+        
+        link = results[idx]
+        
+        if link in SONG_LINKS:
+            await interaction.followup.send(f"Song already exists")
+            return
+        
+        song = Song(singer, title, link, 0, 0)
+        download(song)
+        SONGS.append(song)
+        SONG_NAMES[song_name] = song
+        SONG_LINKS.add(link)
+        database.add_song(song)
+        if singer not in ALIASES:
+            ALIASES[singer] = singer
+            database.add_alias((singer, singer))
+        
+        await interaction.followup.send(f"Added {song.name()} to the song list.")
+        
     except asyncio.TimeoutError:
         await interaction.followup.send("Timeout: You took too long to respond.")
 
@@ -450,38 +434,49 @@ async def play_top(interaction: discord.Interaction, n: int):
         await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
         return
 
+    if not interaction.user.voice or not interaction.user.voice.channel:
+        await interaction.response.send_message("You need to be in a voice channel to play music.")
+        return
+
+    if interaction.guild.id in PLAYING_QUEUE and interaction.user.voice.channel.id != PLAYING_QUEUE[interaction.guild.id].vc.channel.id:
+        await interaction.response.send_message("Already playing in another voice channel!")
+        return
+
     song_history = sorted([(SONG_HISTORY[link], link) for link in SONG_HISTORY], reverse=True)
     for count, link in song_history[:n]:
-        
-    
+        key = random.randint(RANDOM_MIN, RANDOM_MAX)
+        enqueue(interaction.guild.id, interaction.user.voice, Song.TEMP_SONG(key, link))
+
+    if not PLAYING_QUEUE[interaction.guild.id].playing:
+        await start_playing(interaction.guild.id)
 
 
 # Command to rate a song
 @tree.command(name="rate", description="Rate a song from 0 to 10.")
 async def rate_song(interaction: discord.Interaction, singer: str, title: str, rating: int):
-    if singer not in SONG_LIST and title not in SONG_LIST[singer]:
+    song_name = Song.format(singer, title)
+
+    if song_name not in SONG_NAMES:
         await interaction.response.send_message("Song not found.")
         return
     if rating < 0 or rating > 10:
         await interaction.response.send_message("Please provide a rating between 0 and 10.")
         return
-
-    SONG_LIST[singer][title]["rating"] += rating
-    SONG_LIST[title][title]["ratingcount"] += 1
-    await interaction.response.send_message(f"Thanks for rating {title}. New average: {SONG_LIST[singer][title]['rating'] / SONG_LIST[singer][title]['ratingcount']:.2f}/10")
-    save()
-
+    
+    song = SONG_NAMES[song_name]
+    song.rating += rating
+    song.ratingcount += 1
+    database.update_song(song)
+    await interaction.response.send_message(f"Thanks for rating {song_name}. New average: {song.rating/song.ratingcount}")
+    
+    
 # Command to display all songs
 @tree.command(name="list", description="List all songs with their ratings.")
 async def list_songs(interaction: discord.Interaction):
-    if not SONG_LIST:
+    if not len(SONGS):
         await interaction.response.send_message("No songs available.")
         return
-    song_list = "\n".join([
-        "\n".join(
-            [f"{singer}-{title}: {SONG_LIST[singer][title]['rating'] / SONG_LIST[singer][title]['ratingcount']:.2f}/10" if SONG_LIST[singer][title]['ratingcount'] > 0 
-            else f"{title}: unrated" for title in SONG_LIST[singer]]) 
-        for singer in SONG_LIST])
+    song_list = "\n".join((str(song) for song in SONGS))
     await interaction.response.send_message(f"Songs:\n{song_list}")
 
 # Command to redownload all songs
@@ -494,10 +489,34 @@ async def redownload_songs(interaction: discord.Interaction):
         file_path = os.path.join(DATA_SONGS, filename)
         if os.path.isfile(file_path):
             os.remove(file_path)
-    for singer in SONG_LIST:
-        for title in SONG_LIST[singer]:
-            downloadPernament(SONG_LIST[singer][title]["youtube"], singer, title)
+    for song in SONGS:
+        download(song)
     await interaction.response.send_message("All songs redownloaded.")
+
+@tree.command(name="reconfigure", description="Reconfigure SQL tables. Drops all aliases")
+async def reconfigure(interaction: discord.Interaction):
+    if interaction.user.id != ADMIN:
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
+    
+    await interaction.response.send_message("Reconfiguring...", ephemeral=True)
+
+    database.drop_all()
+    database.init_aliases(dict())
+    database.init_songs(list(), set(), dict())
+    database.init_songs_history(dict())
+    ALIASES = {}
+    for song in SONGS:
+        database.add_song(song)
+        ALIASES[song.singer] = song.singer
+    for alias in ALIASES:
+        database.add_alias((alias, ALIASES[alias]))
+    for link in SONG_HISTORY:
+        database.add_song_history((link, SONG_HISTORY[link]))
+
+    await interaction.followup.send("Done.", ephemeral=True)
+    database.DEBUG = False
+    return
 
 # Run the bot
 @bot.event
@@ -508,8 +527,10 @@ async def on_ready():
 
 if not os.path.isdir(DATA_FOLDER):
     os.mkdir(DATA_FOLDER)
-    if not os.path.isdir(DATA_SONGS):
-        os.mkdir(DATA_SONGS)
+if not os.path.isdir(DATA_SONGS):
+    os.mkdir(DATA_SONGS)
+if not os.path.isdir(DATA_TEMP):
+    os.mkdir(DATA_TEMP)
 if not os.path.isfile(DATA_TXT):
     with open(DATA_TXT, "w+") as file:
         pass
@@ -528,8 +549,8 @@ with open(f"{DATA_FOLDER}//whitelist.txt") as file:
             USER_ID.add(int(line.rstrip()))
         except:
             print(f"Data file corrupted at line: {line}")
-for filename in os.listdir(DATA_TMP):
-    file_path = os.path.join(DATA_TMP, filename)
+for filename in os.listdir(DATA_TEMP):
+    file_path = os.path.join(DATA_TEMP, filename)
     if os.path.isfile(file_path):
         os.remove(file_path)
 
